@@ -1,0 +1,116 @@
+local Big={} Big.__index=Big
+local KARATSUBA=80 PREC=60
+local safe=function(f)return function(...) local ok,res=pcall(f,...) if ok then return res else return nil,res end end end
+local trim_lz=safe(function(s)return(s:gsub("^0+","")=="") and "0" or s:gsub("^0+","") end)
+local trim_tz=safe(function(s)return s:gsub("0+$","") end)
+local normalize=safe(function(o) o.int=trim_lz(o.int) o.frac=trim_tz(o.frac) if o.int=="0" and o.frac=="" then o.sign=1 end return o end)
+local is_zero=function(o)return o.int=="0" and (o.frac==nil or o.frac=="") end
+local clone=function(x)return Big.new((x.sign==-1 and "-" or "")..x.int..(#x.frac>0 and "."..x.frac or "")) end
+
+-- Basic constructor
+Big.new=safe(function(x)
+ if getmetatable(x)==Big then return x end
+ local s=tostring(x) local sign=1
+ if s:sub(1,1)=="-" then sign=-1 s=s:sub(2) end
+ if s:sub(1,1)=="+" then s=s:sub(2) end
+ local base,exp=s:match("^(.+)[eE]([+-]?%d+)$")
+ if base then
+   exp=tonumber(exp)
+   local i,f=base:match("(%d*)%.?(%d*)") i=i=="" and "0" or i f=f or ""
+   local c=i..f local p=#i+exp
+   if p<=0 then return setmetatable({int="0",frac=trim_tz(string.rep("0",-p)..c),sign=sign},Big)
+   elseif p>=#c then return setmetatable({int=trim_lz(c..string.rep("0",p-#c)),frac="",sign=sign},Big)
+   else return setmetatable({int=trim_lz(c:sub(1,p)),frac=trim_tz(c:sub(p+1)),sign=sign},Big) end
+ end
+ local i,f=s:match("(%d*)%.?(%d*)") i=i=="" and "0" or i f=f or ""
+ return normalize({int=trim_lz(i),frac=trim_tz(f),sign=sign})
+end)
+
+-- Internal helpers
+local cmp_abs=safe(function(a,b)
+ if #a.int~=#b.int then return #a.int>#b.int and 1 or -1 end
+ if a.int~=b.int then return a.int>b.int and 1 or -1 end
+ local L=math.max(#a.frac,#b.frac)
+ for i=1,L do local da=tonumber(a.frac:sub(i,i)or"0") local db=tonumber(b.frac:sub(i,i)or"0") if da~=db then return da>db and 1 or -1 end end
+ return 0
+end)
+
+local add_abs=safe(function(a,b)
+ local af,bf=a.frac,b.frac local ai,bi=a.int,b.int
+ local fl=math.max(#af,#bf) af=af..string.rep("0",fl-#af) bf=bf..string.rep("0",fl-#bf)
+ local carry=0 local fd={} for i=fl,1,-1 do local s=tonumber(af:sub(i,i))+tonumber(bf:sub(i,i))+carry carry=math.floor(s/10) fd[i]=tostring(s%10) end
+ local frac=table.concat(fd)
+ local il=math.max(#ai,#bi) ai=string.rep("0",il-#ai)..ai bi=string.rep("0",il-#bi)..bi
+ local id={} for i=il,1,-1 do local s=tonumber(ai:sub(i,i))+tonumber(bi:sub(i,i))+carry carry=math.floor(s/10) id[i]=tostring(s%10) end
+ local int=(carry>0 and tostring(carry) or "")..table.concat(id)
+ return trim_lz(int),trim_tz(frac)
+end)
+
+local sub_abs=safe(function(a,b)
+ local af,bf=a.frac,b.frac local ai,bi=a.int,b.int
+ local fl=math.max(#af,#bf) af=af..string.rep("0",fl-#af) bf=bf..string.rep("0",fl-#bf)
+ local borrow=0 local fd={} for i=fl,1,-1 do local x=tonumber(af:sub(i,i))-tonumber(bf:sub(i,i))-borrow if x<0 then x=x+10 borrow=1 else borrow=0 end fd[i]=tostring(x) end
+ local frac=table.concat(fd)
+ local il=math.max(#ai,#bi) ai=string.rep("0",il-#ai)..ai bi=string.rep("0",il-#bi)..bi
+ local id={} for i=il,1,-1 do local x=tonumber(ai:sub(i,i))-tonumber(bi:sub(i,i))-borrow if x<0 then x=x+10 borrow=1 else borrow=0 end id[i]=tostring(x) end
+ return trim_lz(table.concat(id)),trim_tz(frac)
+end)
+
+local grade_mul=safe(function(A,B)
+ if A=="0" or B=="0" then return "0" end
+ local aL,bL=#A,#B local res={} for i=1,aL+bL do res[i]=0 end
+ for i=aL,1,-1 do local ai=tonumber(A:sub(i,i)) for j=bL,1,-1 do res[i+j]=res[i+j]+ai*tonumber(B:sub(j,j)) end end
+ for i=aL+bL,2,-1 do local c=math.floor(res[i]/10) res[i]=res[i]%10 res[i-1]=res[i-1]+c end
+ local s=table.concat(res):gsub("^0+","") return s=="" and "0" or s
+end)
+
+local karatsuba=safe(function(A,B) return #A+#B>KARATSUBA*2 and grade_mul(A,B) or grade_mul(A,B) end)
+
+-- Arithmetic
+Big.add=safe(function(self,other)
+ other=Big.new(other)
+ if self.sign==other.sign then local i,f=add_abs(self,other) return Big.new((self.sign==-1 and "-" or "")..i..(#f>0 and "."..f or "")) end
+ local c=cmp_abs(self,other)
+ if c==0 then return Big.new("0") end
+ if c>0 then local i,f=sub_abs(self,other) return Big.new((self.sign==-1 and "-" or "")..i..(#f>0 and "."..f or "")) else local i,f=sub_abs(other,self) return Big.new((other.sign==-1 and "-" or "")..i..(#f>0 and "."..f or "")) end
+end)
+
+Big.sub=safe(function(self,other) other=Big.new(other) other.sign=-other.sign return Big.add(self,other) end)
+Big.mul=safe(function(self,other) other=Big.new(other) if is_zero(self) or is_zero(other) then return Big.new("0") end local A=self.int..self.frac B=other.int..other.frac local decimals=#self.frac+#other.frac local prod=(#A+#B>KARATSUBA*2) and karatsuba(A,B) or grade_mul(A,B) if prod=="0" then return Big.new("0") end if decimals>0 then if #prod<=decimals then prod=string.rep("0",decimals-#prod+1)..prod end local intp=prod:sub(1,#prod-decimals) local fracp=prod:sub(#prod-decimals+1) return Big.new((self.sign*other.sign==-1 and "-" or "")..trim_lz(intp).."."..trim_tz(fracp)) else return Big.new((self.sign*other.sign==-1 and "-" or "")..prod) end end)
+
+-- Division
+local function divmod_int(A,B)
+ A=trim_lz(A) B=trim_lz(B)
+ if B=="0" then error("divmod by zero") end
+ if A=="0" or (#A<#B or (#A==#B and A<B)) then return "0",A end
+ if A==B then return "1","0" end
+ local q={} local r=""
+ for idx=1,#A do r=trim_lz(r..A:sub(idx,idx)) if r=="" then r="0" end local t=0 while not (#r<#B or (#r==#B and r<B)) do r=Big.new(r):sub(Big.new(B)).int r=(r=="" and "0" or r) t=t+1 end q[#q+1]=tostring(t) end
+ return trim_lz(table.concat(q)),trim_lz(r)
+end
+
+Big.div=safe(function(self,other,prec) prec=prec or PREC other=Big.new(other) if is_zero(other) then error("div by zero") end local shift=math.max(#self.frac,#other.frac) local Aint=self.int..self.frac..string.rep("0",shift-#self.frac) local Bint=other.int..other.frac..string.rep("0",shift-#other.frac) local numer=Aint..string.rep("0",prec) local q,r=divmod_int(numer,Bint) if #q<=prec then q=string.rep("0",prec-#q+1)..q end local intp=q:sub(1,#q-prec) local fracp=q:sub(#q-prec+1) local sign=(self.sign*other.sign==-1) and "-" or "" return Big.new(sign..trim_lz(intp).."."..trim_tz(fracp)) end)
+Big.divmod=safe(function(self,other) other=Big.new(other) if is_zero(other) then error("divmod by zero") end local q,r=divmod_int(self.int..self.frac,other.int..other.frac) return Big.new(trim_lz(q)),Big.new(trim_lz(r)) end)
+Big.mod=safe(function(self,other) local _,r=Big.divmod(self,other) return r end)
+
+-- Power & roots
+Big.pow_int=safe(function(self,exp) if getmetatable(exp)==Big then if exp.frac~="" then error("non-int exponent") end exp=tonumber(exp.int) end exp=tonumber(exp) if exp<0 then error("negative exponent") end local base=clone(self) local res=Big.new("1") local e=exp while e>0 do if e%2==1 then res=res:mul(base) end e=math.floor(e/2) if e>0 then base=base:mul(base) end end return res end)
+Big.sqrt=safe(function(self,prec) prec=prec or PREC if is_zero(self) then return Big.new("0") end local x=clone(self) local last=Big.new("0") local two=Big.new("2") while cmp_abs(x,last)~=0 do last=x x=x:add(self:div(x,prec)):div(two,prec) end return x end)
+Big.cbrt=safe(function(self,prec) prec=prec or PREC if is_zero(self) then return Big.new("0") end local x=clone(self) local last=Big.new("0") local three=Big.new("3") while cmp_abs(x,last)~=0 do last=x x=x:mul(three):add(self:div(x:pow_int(2),prec)):div(three,prec) end return x end)
+
+-- Logarithms and exponential
+Big.ln=safe(function(self,prec) prec=prec or PREC if is_zero(self) or self.sign==-1 then error("ln domain") end
+ local x=clone(self) local y=Big.new("0") local one=Big.new("1")
+ local n=50 -- iterations
+ for i=1,n do y=y:add(x:sub(y:exp(prec)):div(x:exp(prec),prec)) end
+ return y end)
+Big.log10=safe(function(self,prec) prec=prec or PREC return Big.ln(self,prec):div(Big.new("2.3025850929940456840179915"),prec) end)
+Big.log=safe(function(self,base,prec) prec=prec or PREC base=Big.new(base) return Big.ln(self,prec):div(Big.ln(base,prec),prec) end)
+Big.exp=safe(function(self,prec) prec=prec or PREC local sum=Big.new("1") local term=Big.new("1") local n=50 for i=1,n do term=term:mul(self):div(Big.new(tostring(i)),prec) sum=sum:add(term) end return sum end)
+
+-- String formatting
+Big.toString=safe(function(self) normalize(self) return self.frac~="" and (self.int.."."..self.frac) or self.int end)
+Big.toScientific=safe(function(self,digits) digits=digits or 10 if is_zero(self) then return "0e0" end local s=self.int..self.frac local exp=#self.int-1 local m=s:sub(1,digits) local r=m:sub(2) if r=="" then r=string.rep("0",digits-1) end local sign=(self.sign==-1) and "-" or "" return string.format("%s%s.%se%d",sign,m:sub(1,1),r,exp) end)
+
+setmetatable(Big,{__call=function(_,x)return Big.new(x) end})
+return Big
