@@ -1,3 +1,3 @@
 # Big-number-for-lua
 A script able to read numbers as large as you want and calculate with a precision of up to 60 digits.
-This script is not yet fully finished, I am still working on modifying the script so that it will be able to read scientific suffixes for example 1F836. If you find any issues or bug with the code you could just simply tell me and I will try to fix it as soon as i can.
+This script is not yet fully finished, I am still working on modifying the script so that it will be able to read scientific suffixes for example 1F836. If you find any issues or bug with the code you could just simply tell me and I will try to fix it as soon as i can. But for now, this script will be able to read numbers with as many "e" or "E" in them as long as they are formatted correctly (e.g e notation only start from 1e9 or higher and F notation only start at eeeee1 or higher, which is 1F5).
